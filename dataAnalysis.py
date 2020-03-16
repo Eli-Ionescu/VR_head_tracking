@@ -1,12 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from mpl_toolkits.mplot3d import Axes3D
-import mpl_toolkits.mplot3d.axes3d as p3
-import csv
-from celluloid import Camera
-from scipy import fftpack
+
 from scipy.signal import find_peaks
 from scipy.spatial import distance
 import os
@@ -452,114 +447,92 @@ def main():
                                         'max_dist_right', 'mean_dist_right', 'sd_dist_right', 'min_dist_left',
                                         'max_dist_left', 'mean_dist_left', 'sd_dist_left'])
 
-    # Test one file, then test more.
-    videos = {
-        1: 0, # Jail break - low valence
-        2: 1, # Puppies - high valence
-        3: 1, # Rope - high valence
-        4: 0  # War - low valence
-    }
+    do_save = False
 
-    data_folder = "user_testing_data"
-    filename = "data_vid"
-    end = ".csv"
+    # 1. Read the data.
+    current_file = "data_example.csv"
+    data = readCSV(current_file)
 
-    do_save = True
+    # 2.Discard first and least seconds.
+    cut_data = cut_endings(data)
+    # 3. Normalize data.
+    data = normalize(cut_data)
 
-    # example filename: user_testing_data/data_vid1_userTEST.csv
-    #                   ${data_folder}+ "/" + ${user_id} + "/" + ${filename} + video_nr + "_" + {user_id} + {end}
+    # 4. Compute the Euclidean distance head - controller
+    # Distance between head-left controller
+    data["dist_head_right"] = compute_distance(data[['head_x', 'head_y', 'head_z']],
+                                               data[['right_c_x', 'right_c_y', 'right_c_z']])
 
-    users = ["user1", "user3", "user4", "user5", "user6", "user7", "user8", # First day
-             "user10", "user11", "user12", "user13", "user14"] # Second day
-    for user_id in users:
-        input_path = data_folder + "/" + user_id + "/"
-        output_path = "normalized_user_testing_results/" + user_id + "/"
-        for video_nr in range(1, 5):
-            print("############## {} {} #############".format(user_id, "vid" + str(video_nr)))
+    data["dist_head_left"] = compute_distance(data[['head_x', 'head_y', 'head_z']],
+                                              data[['left_c_x', 'left_c_y', 'left_c_z']])
 
-            # 1. Read the data.
-            current_file = input_path + filename + str(video_nr) + "_" + user_id + end
-            data = readCSV(current_file)
+    # Normalize distances:
+    maximum = max(data[["dist_head_right", "dist_head_left"]].max())
+    minimum = min(data[["dist_head_right", "dist_head_left"]].min())
+    data["dist_head_right"] = norm(data["dist_head_right"], minimum, maximum)
+    data["dist_head_left"] = norm(data["dist_head_left"], minimum, maximum)
 
-            # 2.Discard first and least seconds.
-            cut_data = cut_endings(data)
-            # 3. Normalize data.
-            data = normalize(cut_data)
+    # 5. Test: Plot positions
+    # Plot the head anc controllers position
+    plots_path = "plots/"
+    if do_save:
+        plot_head_controllers(data, filename=plots_path + "_head_controllers.png", save_fig=do_save)
 
-            # 4. Compute the Euclidean distance head - controller
-            # Distance between head-left controller
-            data["dist_head_right"] = compute_distance(data[['head_x', 'head_y', 'head_z']],
-                                                       data[['right_c_x', 'right_c_y', 'right_c_z']])
+        # Plot the head position only.
+        plot_position(data, filename=plots_path + "_head_position.png", save_fig=do_save)
 
-            data["dist_head_left"] = compute_distance(data[['head_x', 'head_y', 'head_z']],
-                                                      data[['left_c_x', 'left_c_y', 'left_c_z']])
+        # Plot all the angles
+        plot_all_angles(data, filename=plots_path + "_angles.png", save_fig=do_save)
 
-            # Normalize distances:
-            maximum = max(data[["dist_head_right", "dist_head_left"]].max())
-            minimum = min(data[["dist_head_right", "dist_head_left"]].min())
-            data["dist_head_right"] = norm(data["dist_head_right"], minimum, maximum)
-            data["dist_head_left"] = norm(data["dist_head_left"], minimum, maximum)
+        # Plot the computed distance between the head and controllers.
+        plot_head_controller_distance(data, filename=plots_path + "_dist_h_c.png", save_fig=do_save)
 
-            # 5. Test: Plot positions
-            # Plot the head anc controllers position
-            plots_path = "user_testing_plots/vid" + str(video_nr) + "_" + user_id
-            if do_save:
-                plot_head_controllers(data, filename=plots_path +"_head_controllers.png", save_fig=do_save)
+    # 7. Compute simple angle features
+    # Compute: min, max, mean, standard deviation
+    # PAY ATTENTION TO THE LISTS
+    angle_features = compute_angle_features(data)
+    # print(angle_features)
 
-                # Plot the head position only.
-                plot_position(data, filename=plots_path+"_head_position.png",save_fig=do_save)
+    # 8. Plot the frequency for all the angles
+    Pxx, freq = plot_frequency_angles(data[['head_pitch', 'head_yaw', 'head_roll']], save_fig=do_save,
+                                      filename=plots_path + "freq_angles.png")
 
-                # Plot all the angles
-                plot_all_angles(data, filename=plots_path+"_angles.png",save_fig=do_save)
+    frequency_features = get_frequency_features(Pxx, freq)
+    # print(frequency_features)
 
-                # Plot the computed distance between the head and controllers.
-                plot_head_controller_distance(data, filename=plots_path+"_dist_h_c.png", save_fig=do_save)
+    # 9. Compute head-controller distance features
+    distance_features = get_distance_features(data)
+    # print(distance_features)
 
-            # 7. Compute simple angle features
-            # Compute: min, max, mean, standard deviation
-            # PAY ATTENTION TO THE LISTS
-            angle_features = compute_angle_features(data)
-            # print(angle_features)
+    # 10. Put together all the features
+    # There are in total 32 features:
+    # 12 - angle features
+    # 12 - angle frequency features
+    #  8 - distance head left /right controller features
+    # = 32 total features
 
-            # 8. Plot the frequency for all the angles
-            Pxx, freq = plot_frequency_angles(data[['head_pitch', 'head_yaw', 'head_roll']], save_fig=do_save,
-                                              filename=plots_path+"freq_angles.png")
+    result = pd.concat([angle_features, frequency_features, distance_features], axis=1, sort=False)
+    # print(result)
 
-            frequency_features = get_frequency_features(Pxx, freq)
-            # print(frequency_features)
+    all_results = pd.concat([all_results, result], ignore_index=True)
+    # print (all_results)
 
-            # 9. Compute head-controller distance features
-            distance_features = get_distance_features(data)
-            # print(distance_features)
+    # Create new results folder for the user:
+    output_path = "output"
+    output_filename = "output.csv"
+    labels_output_filename = "lables.csv"
 
-            # 10. Put together all the features
-            # There are in total 32 features:
-            # 12 - angle features
-            # 12 - angle frequency features
-            #  8 - distance head left /right controller features
-            # = 32 total features
+    if not(os.path.isdir(output_path)):
+        os.mkdir(output_path)
 
-            result = pd.concat([angle_features, frequency_features, distance_features], axis=1, sort=False)
-            # print(result)
+    # 11. Write result to csv
+    all_results.to_csv(output_filename, sep=",",  index=False)
+    all_results = all_results[0:0]
 
-            all_results = pd.concat([all_results, result], ignore_index=True)
-            # print (all_results)
-
-        # Create new results folder for the user:
-        output_filename = output_path + "data_videos" + "_" + user_id + end
-        labels_output_filename = output_path + "label_videos" + "_" + user_id + end
-
-        if not(os.path.isdir(output_path)):
-            os.mkdir(output_path)
-
-        # 11. Write result to csv
-        all_results.to_csv(output_filename, sep=",",  index=False)
-        all_results = all_results[0:0]
-
-        # 12. Create label videos file
-        labels = pd.DataFrame(columns=["valence"])
-        labels["valence"] = [0, 1, 1, 0]
-        labels.to_csv(labels_output_filename,  index=False)
+    # 12. Create label videos file
+    labels = pd.DataFrame(columns=["valence"])
+    labels["valence"] = [0, 1, 1, 0]
+    labels.to_csv(labels_output_filename,  index=False)
 
 
 if __name__ == '__main__':
